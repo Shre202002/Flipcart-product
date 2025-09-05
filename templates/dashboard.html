@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Dashboard</title>
+</head>
+<body>
+    <h1>User Locations</h1>
+    <ul>
+        {% for user_id, loc in locations.items() %}
+            <li>
+                {{ user_id }}: {{ loc[0] }}, {{ loc[1] }} -
+                <a href="https://www.google.com/maps?q={{ loc[0] }},{{ loc[1] }}" target="_blank">View on Map</a>
+            </li>
+        {% endfor %}
+    </ul>
+</body>
+</html>
