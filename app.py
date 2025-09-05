@@ -22,7 +22,7 @@ click_counts = {}     # {track_id: clicks}
 USERNAME = "Sritan"
 PASSWORD = "Tansri@2018"
 MAX_ATTEMPTS = 2
-SAFE_IPS = ["192.168.1.44"]  # replace with your public IP to never block
+SAFE_IPS = ["110.235.237.142"]  # replace with your device IP to never block
 
 # =====================
 # Authentication helpers
