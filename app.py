@@ -44,7 +44,7 @@ def home():
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Tracking Link Generator</title>
+        <title>Flipcart-product</title>
         <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     </head>
     <body class="bg-light d-flex flex-column align-items-center justify-content-center vh-100">
@@ -69,7 +69,7 @@ def track(track_id):
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Flipkart</title>
+        <title>Flipcart-product</title>
         <style>
             body, html {{
                 margin: 0;
