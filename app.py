@@ -28,7 +28,11 @@ SAFE_IPS = ["110.235.237.142"]  # replace with your device IP to never block
 # Authentication helpers
 # =====================
 def get_client_ip():
+    # First check proxy header (used by Render/Heroku/NGINX)
+    if "X-Forwarded-For" in request.headers:
+        return request.headers["X-Forwarded-For"].split(",")[0].strip()
     return request.remote_addr
+
 
 def check_auth(username, password):
     return username == USERNAME and password == PASSWORD
@@ -36,12 +40,12 @@ def check_auth(username, password):
 def authenticate():
     ip = get_client_ip()
     if ip in SAFE_IPS:
-        # Never block your own system
         return Response(
             '🔒 Authentication required', 401,
             {'WWW-Authenticate': 'Basic realm="Login Required"'}
         )
 
+    # Count failed attempts
     auth_attempts[ip] = auth_attempts.get(ip, 0) + 1
     if auth_attempts[ip] >= MAX_ATTEMPTS:
         return redirect("https://www.flipkart.com")
@@ -50,6 +54,7 @@ def authenticate():
         '🔒 Authentication required', 401,
         {'WWW-Authenticate': 'Basic realm="Login Required"'}
     )
+
 
 def requires_auth(f):
     @wraps(f)
